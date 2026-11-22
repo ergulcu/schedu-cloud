@@ -1,0 +1,64 @@
+# Copyright 2025 Mehmet ERGULCU
+# SPDX-License-Identifier: Apache-2.0
+
+# Test on every push and pull request; the PostgreSQL and Kafka tests start containers.
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: gofmt, vet, test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then echo "Run gofmt -w on:"; echo "$unformatted"; exit 1; fi
+      - run: go vet ./...
+      - name: Test (the container tests use the Docker of the runner)
+        run: go test -race ./...
+      - name: Build for Linux, Windows and macOS
+        run: |
+          for target in linux/amd64 linux/arm64 windows/amd64 darwin/arm64; do
+            GOOS=${target%/*} GOARCH=${target#*/} CGO_ENABLED=0 go build -o /dev/null ./cmd/...
+          done
+      - name: License headers
+        run: |
+          missing=$(git ls-files '*.go' '*.yml' '*.yaml' '*.sql' 'Dockerfile' '*.sh' | grep -v -E '^\.mvn/' | xargs -r grep -L 'SPDX-License-Identifier' || true)
+          if [ -n "$missing" ]; then
+            echo "These files have no license header:"
+            echo "$missing"
+            exit 1
+          fi
+
+  image:
+    name: Docker image
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - run: docker build -t scheducloud:ci .
+      - name: Start against PostgreSQL and answer /readyz
+        run: |
+          docker compose up -d --wait postgres scheducloud-1
+          for i in $(seq 1 30); do curl -sf localhost:8081/readyz && exit 0; sleep 1; done
+          docker compose logs scheducloud-1
+          exit 1
+      - if: always()
+        run: docker compose down -v

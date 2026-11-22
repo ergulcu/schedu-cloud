@@ -1,0 +1,44 @@
+# Copyright 2025 Mehmet ERGULCU
+# SPDX-License-Identifier: Apache-2.0
+
+# Two scheduler instances sharing one database: every fire runs on one of them only.
+#   docker compose up --build
+#   instance 1: http://localhost:8081   instance 2: http://localhost:8082
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: scheducloud
+      POSTGRES_USER: scheducloud
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-scheducloud}
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U scheducloud -d scheducloud"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  scheducloud-1: &scheducloud
+    build: .
+    ports:
+      - "8081:8080"
+    environment: &environment
+      DATABASE_URL: postgres://scheducloud:${POSTGRES_PASSWORD:-scheducloud}@postgres:5432/scheducloud?sslmode=disable
+      INSTANCE_ID: scheducloud-1
+      API_TOKEN: ${API_TOKEN:-}
+      KAFKA_BROKERS: ${KAFKA_BROKERS:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  scheducloud-2:
+    <<: *scheducloud
+    ports:
+      - "8082:8080"
+    environment:
+      <<: *environment
+      INSTANCE_ID: scheducloud-2
+
+volumes:
+  postgres-data:
